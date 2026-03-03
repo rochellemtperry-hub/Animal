@@ -1,0 +1,15 @@
+# Data (do not commit raw photos)
+data/
+!data/raw/.gitkeep
+
+# Model weights
+models/weights/
+*.pt
+*.onnx
+*.pth
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
