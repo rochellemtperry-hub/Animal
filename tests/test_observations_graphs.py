@@ -54,23 +54,31 @@ def test_observation_upsert_and_graph_generation(tmp_path: Path) -> None:
 
     generate_graph_datasets(observations_csv, graphs_dir)
 
-    daily = _read_csv(graphs_dir / "daily_counts_by_camera.csv")
-    species = _read_csv(graphs_dir / "species_by_camera.csv")
-    points = _read_csv(graphs_dir / "observation_points.csv")
-    temp_species = _read_csv(graphs_dir / "temperature_by_species.csv")
-    hourly = _read_csv(graphs_dir / "hourly_activity_by_species.csv")
+    by_month = _read_csv(graphs_dir / "species_by_month.csv")
+    by_hour = _read_csv(graphs_dir / "species_by_hour.csv")
+    by_camera = _read_csv(graphs_dir / "species_by_camera.csv")
+    by_temp = _read_csv(graphs_dir / "species_by_temperature.csv")
+    by_season = _read_csv(graphs_dir / "species_by_season.csv")
+    summary = _read_csv(graphs_dir / "activity_summary.csv")
+    matrix = _read_csv(graphs_dir / "species_presence_matrix.csv")
 
-    assert daily[0] == ["date", "camera_id", "observation_count"]
-    assert ["2026-03-06", "cam-a", "1"] in daily
-    assert ["2026-03-06", "cam-b", "1"] in daily
+    assert by_month[0] == ["species", "year", "month", "sighting_count"]
+    assert ["deer", "2026", "03", "3"] in by_month
 
-    assert species[0] == ["camera_id", "species", "observation_count"]
-    assert ["cam-a", "deer", "1"] in species
-    assert ["cam-b", "deer", "1"] in species
+    assert by_hour[0] == ["species", "hour", "sighting_count"]
+    assert ["deer", "18", "3"] in by_hour
 
-    assert points[0] == ["observation_id", "date", "time", "camera_id", "species", "temperature_c", "image_path"]
-    assert any("data/outputs/animals/a.jpg" in row for row in points[1:])
+    assert by_camera[0] == ["species", "camera_id", "location_name", "sighting_count"]
+    assert ["deer", "cam-a", "north", "1"] in by_camera
+    assert ["deer", "cam-b", "south", "2"] in by_camera
 
-    assert temp_species[0] == ["species", "camera_id", "temperature_c"]
-    assert ["deer", "cam-a", "17.400"] in temp_species
-    assert ["18", "deer", "2"] in hourly
+    assert by_temp[0] == ["species", "temperature_band", "sighting_count"]
+    assert ["deer", "15-20", "3"] in by_temp
+
+    assert by_season[0] == ["species", "season", "sighting_count"]
+    assert ["deer", "Autumn", "3"] in by_season
+
+    assert summary[0] == ["metric", "value"]
+    assert ["total_rows", "2"] in summary
+    assert matrix[0] == ["species", "cam-a", "cam-b"]
+    assert ["deer", "1", "1"] in matrix

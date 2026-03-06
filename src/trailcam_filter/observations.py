@@ -29,6 +29,7 @@ OBSERVATION_HEADERS = [
 
 CAMERA_HEADERS = [
     "camera_id",
+    "location_name",
     "camera_name",
     "location_lat",
     "location_lon",
@@ -102,12 +103,24 @@ def _empty_row() -> dict[str, str]:
 
 
 def ensure_camera_metadata_file(path: Path) -> None:
-    if path.exists():
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(CAMERA_HEADERS)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        existing = [dict(row) for row in reader]
+        header = reader.fieldnames or []
+    if header == CAMERA_HEADERS:
+        return
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(CAMERA_HEADERS)
+        writer = csv.DictWriter(handle, fieldnames=CAMERA_HEADERS)
+        writer.writeheader()
+        for row in existing:
+            writer.writerow({key: (row.get(key) or "") for key in CAMERA_HEADERS})
 
 
 def ensure_observations_file(path: Path) -> None:

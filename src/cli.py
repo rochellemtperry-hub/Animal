@@ -25,6 +25,7 @@ from trailcam_filter.observations import (
 from trailcam_filter.overlay import extract_overlay_readout
 from trailcam_filter.postprocess import RunSummary
 from trailcam_filter.report import ReportRow, write_report
+from trailcam_filter.species_reference import load_species_reference
 
 
 def _chunked(items: list[Path], size: int) -> Iterator[list[Path]]:
@@ -58,6 +59,18 @@ def _prompt(prompt: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
     value = input(f"{prompt}{suffix}: ").strip()
     return value if value else default
+
+
+def _species_prompt_with_suggestions(common_species: list[str], current_value: str) -> str:
+    print("Species suggestions:")
+    for i, species in enumerate(common_species, start=1):
+        print(f"  {i}. {species}")
+    raw = _prompt("species (enter number or name)", current_value)
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(common_species):
+            return common_species[idx - 1]
+    return raw
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -95,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--default-camera-id", default="unknown")
     review.add_argument("--camera-id", default=None, help="Force one camera_id for all reviewed images")
     review.add_argument("--no-recursive", action="store_true", help="Disable recursive review scan")
+    review.add_argument("--reference-dir", type=Path, default=Path("data/reference"), help="Species reference directory")
+
+    analytics = subparsers.add_parser("analytics", help="Generate wildlife analytics CSVs")
+    analytics.add_argument("--observations-csv", type=Path, default=Path("data/observations/animal_observations.csv"))
+    analytics.add_argument("--graphs-dir", type=Path, default=Path("data/graphs"))
     return parser
 
 
@@ -232,12 +250,20 @@ def run_process(config: AppConfig, forced_camera_id: str | None = None) -> int:
     return 0
 
 
-def run_review(input_dir: Path, observations_csv: Path, recursive: bool, default_camera_id: str, forced_camera_id: str | None) -> int:
+def run_review(
+    input_dir: Path,
+    observations_csv: Path,
+    recursive: bool,
+    default_camera_id: str,
+    forced_camera_id: str | None,
+    reference_dir: Path,
+) -> int:
     if not input_dir.exists() or not input_dir.is_dir():
         raise FileNotFoundError(f"Review input directory not found: {input_dir}")
 
     ensure_observations_file(observations_csv)
     rows = load_observations(observations_csv)
+    species_ref = load_species_reference(reference_dir)
     images = discover_images(input_dir, recursive=recursive)
     if not images:
         print(f"No images found in {input_dir}")
@@ -252,16 +278,21 @@ def run_review(input_dir: Path, observations_csv: Path, recursive: bool, default
         )
         idx = find_observation_index(rows, str(image_path), image_path.name, camera_id)
         if idx is None:
+            metadata = extract_image_metadata(image_path)
+            overlay = extract_overlay_readout(image_path)
+            timestamp = overlay.timestamp_iso or metadata.timestamp or ""
+            date, time = _split_datetime(timestamp)
+            temperature_c_value = overlay.temperature_c if overlay.temperature_c is not None else metadata.temperature_c
             rows.append(
                 ObservationRecord(
                     observation_id="",
                     file_name=image_path.name,
                     camera_id=camera_id,
                     location_name="",
-                    photo_datetime="",
-                    date="",
-                    time="",
-                    temperature_c="",
+                    photo_datetime=timestamp,
+                    date=date,
+                    time=time,
+                    temperature_c="" if temperature_c_value is None else f"{temperature_c_value:.3f}",
                     animal_detected="yes",
                     species="unknown",
                     species_confidence="",
@@ -276,13 +307,28 @@ def run_review(input_dir: Path, observations_csv: Path, recursive: bool, default
         print("\n--- Review ---")
         print(f"file_name:           {row.get('file_name', '')}")
         print(f"camera_id:           {row.get('camera_id', '')}")
+        print(f"location_name:       {row.get('location_name', '')}")
         print(f"photo_datetime:      {row.get('photo_datetime', '')}")
         print(f"temperature_c:       {row.get('temperature_c', '')}")
         print(f"ai species/conf:     {row.get('species', '')} / {row.get('species_confidence', '')}")
         print(f"ai count:            {row.get('count', '')}")
         print(f"image_path:          {row.get('image_path', '')}")
 
-        row["species"] = _prompt("species", row.get("species", ""))
+        entered_species = _species_prompt_with_suggestions(species_ref.suggest(), row.get("species", ""))
+        normalized_species = species_ref.normalize(entered_species)
+        in_common = species_ref.in_common(normalized_species)
+        in_regional = species_ref.in_regional(normalized_species)
+        if not species_ref.known(normalized_species):
+            print(
+                f"Warning: '{normalized_species}' is not found in "
+                "common_trailcam_species.csv or north_burnett_species.csv."
+            )
+        else:
+            print(
+                f"Species normalized to '{normalized_species}' "
+                f"(common={in_common}, regional={in_regional})"
+            )
+        row["species"] = normalized_species
         row["count"] = _prompt("count", row.get("count", "1") or "1")
         row["reviewed"] = _to_yes_no(_prompt("reviewed (yes/no)", row.get("reviewed", "yes") or "yes"))
         row["ai_corrected"] = _to_yes_no(_prompt("ai_corrected (yes/no)", row.get("ai_corrected", "no") or "no"))
@@ -325,6 +371,12 @@ def run_review(input_dir: Path, observations_csv: Path, recursive: bool, default
     return 0
 
 
+def run_analytics(observations_csv: Path, graphs_dir: Path) -> int:
+    generate_graph_datasets(observations_csv=observations_csv, graphs_dir=graphs_dir)
+    print(f"Analytics datasets written to: {graphs_dir}")
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     argv = sys.argv[1:]
@@ -339,7 +391,10 @@ def main() -> int:
             recursive=not args.no_recursive,
             default_camera_id=args.default_camera_id,
             forced_camera_id=args.camera_id,
+            reference_dir=args.reference_dir,
         )
+    if args.command == "analytics":
+        return run_analytics(observations_csv=args.observations_csv, graphs_dir=args.graphs_dir)
 
     config = config_from_args(args)
     return run_process(config=config, forced_camera_id=getattr(args, "camera_id", None))
