@@ -20,5 +20,6 @@ class AppConfig:
     action: str = "copy"
     keep_structure: bool = True
     device: str | None = None
+    default_camera_id: str = "unknown"
     batch_size: int = 16
     dry_run: bool = False

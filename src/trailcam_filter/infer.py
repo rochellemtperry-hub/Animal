@@ -176,8 +176,7 @@ class UltraLyticsDetector:
             pred,
             conf_thres=self._conf,
             iou_thres=self._iou,
-            classes=None,
-            agnostic=False,
+            classes=None,            agnostic=False,
             max_det=1000,
         )
         if not pred:

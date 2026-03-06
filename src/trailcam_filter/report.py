@@ -7,6 +7,8 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class ReportRow:
+    run_id: str
+    camera_id: str
     source_path: str
     output_path: str
     has_animal: bool
@@ -23,6 +25,8 @@ def write_report(rows: list[ReportRow], output_csv: Path) -> None:
             [
                 "source_path",
                 "output_path",
+                "run_id",
+                "camera_id",
                 "has_animal",
                 "top_animal_confidence",
                 "total_detections",
@@ -34,6 +38,8 @@ def write_report(rows: list[ReportRow], output_csv: Path) -> None:
                 [
                     row.source_path,
                     row.output_path,
+                    row.run_id,
+                    row.camera_id,
                     row.has_animal,
                     f"{row.top_animal_confidence:.6f}",
                     row.total_detections,
