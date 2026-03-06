@@ -18,6 +18,7 @@ from trailcam_filter.observations import (
     ensure_observations_file,
     load_known_camera_ids,
 )
+from trailcam_filter.overlay import extract_overlay_readout
 from trailcam_filter.postprocess import RunSummary
 from trailcam_filter.report import ReportRow, write_report
 
@@ -186,6 +187,7 @@ def run(config: AppConfig) -> int:
 
         for image_path, result in zip(image_batch, batch_results):
             metadata = extract_image_metadata(image_path)
+            overlay = extract_overlay_readout(image_path)
             camera_id = camera_id_for_image(image_path, config.input_dir)
             if known_camera_ids and camera_id not in known_camera_ids:
                 unknown_camera_ids.add(camera_id)
@@ -212,8 +214,11 @@ def run(config: AppConfig) -> int:
                 )
             )
             if result.has_animal:
-                timestamp = metadata.timestamp or ""
-                temperature_c = "" if metadata.temperature_c is None else f"{metadata.temperature_c:.3f}"
+                timestamp = overlay.timestamp_iso or metadata.timestamp or ""
+                temperature_c_value = overlay.temperature_c if overlay.temperature_c is not None else metadata.temperature_c
+                temperature_f_value = overlay.temperature_f
+                temperature_c = "" if temperature_c_value is None else f"{temperature_c_value:.3f}"
+                temperature_f = "" if temperature_f_value is None else f"{temperature_f_value:.3f}"
                 gps_lat = "" if metadata.gps_lat is None else f"{metadata.gps_lat:.6f}"
                 gps_lon = "" if metadata.gps_lon is None else f"{metadata.gps_lon:.6f}"
                 for detection in result.detections:
@@ -223,6 +228,8 @@ def run(config: AppConfig) -> int:
                         ObservationRow(
                             observation_id=uuid.uuid4().hex,
                             timestamp=timestamp,
+                            overlay_date=overlay.date_ymd or "",
+                            overlay_time=overlay.time_24h or "",
                             camera_id=camera_id,
                             image_path=str(out_path),
                             source_path=str(image_path),
@@ -230,8 +237,10 @@ def run(config: AppConfig) -> int:
                             confidence=detection.confidence,
                             run_id=run_id,
                             temperature_c=temperature_c,
+                            temperature_f=temperature_f,
                             gps_lat=gps_lat,
                             gps_lon=gps_lon,
+                            overlay_text=overlay.raw_text,
                         )
                     )
 

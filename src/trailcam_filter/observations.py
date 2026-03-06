@@ -9,6 +9,8 @@ import uuid
 OBSERVATION_HEADERS = [
     "observation_id",
     "timestamp",
+    "overlay_date",
+    "overlay_time",
     "camera_id",
     "image_path",
     "source_path",
@@ -16,8 +18,10 @@ OBSERVATION_HEADERS = [
     "confidence",
     "run_id",
     "temperature_c",
+    "temperature_f",
     "gps_lat",
     "gps_lon",
+    "overlay_text",
 ]
 
 CAMERA_HEADERS = [
@@ -34,6 +38,8 @@ CAMERA_HEADERS = [
 class ObservationRow:
     observation_id: str
     timestamp: str
+    overlay_date: str
+    overlay_time: str
     camera_id: str
     image_path: str
     source_path: str
@@ -41,8 +47,10 @@ class ObservationRow:
     confidence: float
     run_id: str
     temperature_c: str
+    temperature_f: str
     gps_lat: str
     gps_lon: str
+    overlay_text: str
 
 
 def new_run_id() -> str:
@@ -81,6 +89,8 @@ def ensure_observations_file(path: Path) -> None:
                     {
                         "observation_id": row_map.get("observation_id", ""),
                         "timestamp": row_map.get("timestamp", ""),
+                        "overlay_date": row_map.get("overlay_date", ""),
+                        "overlay_time": row_map.get("overlay_time", ""),
                         "camera_id": row_map.get("camera_id", ""),
                         "image_path": row_map.get("image_path", ""),
                         "source_path": row_map.get("source_path", ""),
@@ -88,8 +98,10 @@ def ensure_observations_file(path: Path) -> None:
                         "confidence": row_map.get("confidence", ""),
                         "run_id": row_map.get("run_id", ""),
                         "temperature_c": row_map.get("temperature_c", ""),
+                        "temperature_f": row_map.get("temperature_f", ""),
                         "gps_lat": row_map.get("gps_lat", ""),
                         "gps_lon": row_map.get("gps_lon", ""),
+                        "overlay_text": row_map.get("overlay_text", ""),
                     }
                 )
             with path.open("w", newline="", encoding="utf-8") as handle:
@@ -138,6 +150,8 @@ def append_observations(path: Path, rows: list[ObservationRow]) -> None:
                 [
                     row.observation_id,
                     row.timestamp,
+                    row.overlay_date,
+                    row.overlay_time,
                     row.camera_id,
                     row.image_path,
                     row.source_path,
@@ -145,7 +159,9 @@ def append_observations(path: Path, rows: list[ObservationRow]) -> None:
                     f"{row.confidence:.6f}",
                     row.run_id,
                     row.temperature_c,
+                    row.temperature_f,
                     row.gps_lat,
                     row.gps_lon,
+                    row.overlay_text,
                 ]
             )

@@ -14,6 +14,7 @@ Given an input folder, the tool writes:
 - `data/reports/detections.csv`
 - `data/observations/animal_observations.csv` (append-only canonical observations)
 - `data/graphs/*.csv` (graph-ready aggregate datasets)
+- `data/graphs/*.png` (visual charts when plotting deps are installed)
 
 CSV columns:
 - `source_path`
@@ -29,6 +30,8 @@ CSV columns:
 - Runtime dependencies installed from `requirements.txt`
 - YOLOv5 code available at `vendor/yolov5`
 - A YOLOv5-compatible model weights file (default: `models/weights/megadetector.pt`)
+- For overlay bar extraction: `pytesseract`, `Pillow`, and system `tesseract-ocr`
+- For styled chart rendering: `matplotlib`
 
 This repo imports YOLOv5 internals directly (`models.*`, `utils.*`), so include `vendor/yolov5` on `PYTHONPATH`.
 
@@ -159,8 +162,8 @@ PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --dry-run
 
 - Animal detections are appended to `data/observations/animal_observations.csv`.
 - Metadata extraction attempts to capture:
-  - `timestamp` (EXIF date/time)
-  - `temperature_c` (when embedded in EXIF description/comments)
+  - overlay OCR fields: `overlay_date`, `overlay_time`, `temperature_c`, `temperature_f`
+  - EXIF fallback: `timestamp`, `temperature_c`
   - `gps_lat`, `gps_lon`
 - Camera ID is inferred from the first folder under input root.
   - Example: `data/raw/cam_01/image.jpg` -> `camera_id=cam_01`
@@ -169,6 +172,23 @@ PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --dry-run
   - `species_by_camera.csv`
   - `camera_cooccurrence.csv`
   - `observation_points.csv` (includes image paths for linking back to files)
+  - `temperature_by_species.csv`
+  - `hourly_activity_by_species.csv`
+- Visual chart outputs (for quick presentation / channel usage):
+  - `temperature_by_species.png`
+  - `activity_by_hour.png`
+
+## OCR Setup (Overlay Bar)
+
+Ubuntu/Debian example:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr
+pip install pillow pytesseract matplotlib
+```
+
+If OCR dependencies are missing, the pipeline still runs but overlay fields remain blank.
 ## Testing
 
 Run the smoke test suite from the repo root:
