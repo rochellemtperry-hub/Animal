@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 from itertools import islice
-from typing import Iterator
 from pathlib import Path
+import sys
+from typing import Iterator
 import uuid
 
 from trailcam_filter.config import AppConfig
@@ -12,106 +13,88 @@ from trailcam_filter.infer import UltraLyticsDetector, infer_detections, infer_i
 from trailcam_filter.io import discover_images, route_image
 from trailcam_filter.metadata import extract_image_metadata
 from trailcam_filter.observations import (
-    ObservationRow,
-    append_observations,
+    ObservationRecord,
     camera_id_for_image,
     ensure_observations_file,
-    load_known_camera_ids,
+    find_observation_index,
+    load_camera_lookup,
+    load_observations,
+    upsert_and_save,
+    write_observations,
 )
 from trailcam_filter.overlay import extract_overlay_readout
 from trailcam_filter.postprocess import RunSummary
 from trailcam_filter.report import ReportRow, write_report
 
 
+def _chunked(items: list[Path], size: int) -> Iterator[list[Path]]:
+    if size <= 0:
+        raise ValueError("batch_size must be >= 1")
+    iterator = iter(items)
+    while True:
+        batch = list(islice(iterator, size))
+        if not batch:
+            break
+        yield batch
+
+
+def _split_datetime(value: str) -> tuple[str, str]:
+    if not value:
+        return "", ""
+    if "T" in value:
+        date, time = value.split("T", 1)
+        return date[:10], time[:8]
+    if " " in value:
+        date, time = value.split(" ", 1)
+        return date[:10], time[:8]
+    return value[:10], ""
+
+
+def _to_yes_no(value: str) -> str:
+    return "yes" if value.strip().lower() in {"y", "yes", "true", "1"} else "no"
+
+
+def _prompt(prompt: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{prompt}{suffix}: ").strip()
+    return value if value else default
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Trailcam animal image sorter")
-    parser.add_argument("--input", required=True, type=Path, help="Input image directory")
-    parser.add_argument(
-        "--model",
-        type=Path,
-        default=Path("models/weights/megadetector.pt"),
-        help="Path to detector model (.pt)",
-    )
-    parser.add_argument(
-        "--output-animals",
-        type=Path,
-        default=Path("data/outputs/animals"),
-        help="Output directory for animal images",
-    )
-    parser.add_argument(
-        "--output-non-animals",
-        type=Path,
-        default=Path("data/outputs/non_animals"),
-        help="Output directory for non-animal images",
-    )
-    parser.add_argument(
-        "--report-csv",
-        type=Path,
-        default=Path("data/reports/detections.csv"),
-        help="CSV report output path",
-    )
-    parser.add_argument(
-        "--observations-csv",
-        type=Path,
-        default=Path("data/observations/animal_observations.csv"),
-        help="Append-only animal observations CSV path",
-    )
-    parser.add_argument(
-        "--cameras-csv",
-        type=Path,
-        default=Path("data/metadata/cameras.csv"),
-        help="Camera metadata CSV path",
-    )
-    parser.add_argument(
-        "--graphs-dir",
-        type=Path,
-        default=Path("data/graphs"),
-        help="Directory for graph-ready aggregated CSV outputs",
-    )
-    parser.add_argument(
-        "--conf-threshold",
-        type=float,
-        default=0.25,
-        help="Detector confidence threshold",
-    )
-    parser.add_argument(
-        "--iou-threshold",
-        type=float,
-        default=0.45,
-        help="Detector IOU threshold",
-    )
-    parser.add_argument(
-        "--device",
-        default=None,
-        help="Inference device, e.g. 'cpu', 'cuda:0'. Defaults to library auto-selection.",
-    )
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description="Trailcam animal image sorter and review workflow")
+    subparsers = parser.add_subparsers(dest="command")
+
+    process = subparsers.add_parser("process", help="Run AI processing pipeline")
+    process.add_argument("--input", required=True, type=Path, help="Input image directory")
+    process.add_argument("--model", type=Path, default=Path("models/weights/megadetector.pt"))
+    process.add_argument("--output-animals", type=Path, default=Path("data/outputs/animals"))
+    process.add_argument("--output-non-animals", type=Path, default=Path("data/outputs/non_animals"))
+    process.add_argument("--report-csv", type=Path, default=Path("data/reports/detections.csv"))
+    process.add_argument("--observations-csv", type=Path, default=Path("data/observations/animal_observations.csv"))
+    process.add_argument("--cameras-csv", type=Path, default=Path("data/metadata/cameras.csv"))
+    process.add_argument("--graphs-dir", type=Path, default=Path("data/graphs"))
+    process.add_argument("--conf-threshold", type=float, default=0.25)
+    process.add_argument("--iou-threshold", type=float, default=0.45)
+    process.add_argument("--device", default=None)
+    process.add_argument(
         "--batch-size",
         type=int,
-        default=16,
-        help="Images per inference batch. Increase to improve GPU utilization (default: 16).",
+        default=1,
+        help="Images per inference batch. Default is 1 for safe processing.",
     )
-    parser.add_argument(
-        "--action",
-        choices=["copy", "move"],
-        default="copy",
-        help="How to place files in outputs",
-    )
-    parser.add_argument(
-        "--no-recursive",
-        action="store_true",
-        help="Disable recursive image discovery under input directory",
-    )
-    parser.add_argument(
-        "--flat-output",
-        action="store_true",
-        help="Do not preserve subdirectory structure in output directories",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run inference and reporting without copying/moving files",
-    )
+    process.add_argument("--default-camera-id", default="unknown")
+    process.add_argument("--camera-id", default=None, help="Force one camera_id for all input images")
+    process.add_argument("--action", choices=["copy", "move"], default="copy")
+    process.add_argument("--no-recursive", action="store_true")
+    process.add_argument("--flat-output", action="store_true")
+    process.add_argument("--dry-run", action="store_true")
+
+    review = subparsers.add_parser("review", help="Review and tag images in animal outputs")
+    review.add_argument("--input", required=True, type=Path, help="Directory of animal images to review")
+    review.add_argument("--observations-csv", type=Path, default=Path("data/observations/animal_observations.csv"))
+    review.add_argument("--default-camera-id", default="unknown")
+    review.add_argument("--camera-id", default=None, help="Force one camera_id for all reviewed images")
+    review.add_argument("--no-recursive", action="store_true", help="Disable recursive review scan")
     return parser
 
 
@@ -131,23 +114,13 @@ def config_from_args(args: argparse.Namespace) -> AppConfig:
         action=args.action,
         keep_structure=not args.flat_output,
         device=args.device,
+        default_camera_id=args.default_camera_id,
         batch_size=args.batch_size,
         dry_run=args.dry_run,
     )
 
 
-def _chunked(items: list[Path], size: int) -> Iterator[list[Path]]:
-    if size <= 0:
-        raise ValueError("batch_size must be >= 1")
-    iterator = iter(items)
-    while True:
-        batch = list(islice(iterator, size))
-        if not batch:
-            break
-        yield batch
-
-
-def run(config: AppConfig) -> int:
+def run_process(config: AppConfig, forced_camera_id: str | None = None) -> int:
     if not config.input_dir.exists() or not config.input_dir.is_dir():
         raise FileNotFoundError(f"Input directory not found: {config.input_dir}")
     if not config.model_path.exists():
@@ -156,7 +129,7 @@ def run(config: AppConfig) -> int:
         raise ValueError(f"batch_size must be >= 1, got {config.batch_size}")
 
     ensure_observations_file(config.observations_csv)
-    known_camera_ids = load_known_camera_ids(config.cameras_csv)
+    camera_lookup = load_camera_lookup(config.cameras_csv)
     run_id = uuid.uuid4().hex
 
     images = discover_images(config.input_dir, recursive=config.recursive)
@@ -174,9 +147,8 @@ def run(config: AppConfig) -> int:
     print(f"Inference device: {detector.device_name} | batch_size: {config.batch_size}")
 
     summary = RunSummary()
-    rows: list[ReportRow] = []
-    observation_rows: list[ObservationRow] = []
-    unknown_camera_ids: set[str] = set()
+    report_rows: list[ReportRow] = []
+    observations: list[ObservationRecord] = []
 
     for image_batch in _chunked(images, config.batch_size):
         if hasattr(detector, "predict_batch"):
@@ -188,9 +160,10 @@ def run(config: AppConfig) -> int:
         for image_path, result in zip(image_batch, batch_results):
             metadata = extract_image_metadata(image_path)
             overlay = extract_overlay_readout(image_path)
-            camera_id = camera_id_for_image(image_path, config.input_dir)
-            if known_camera_ids and camera_id not in known_camera_ids:
-                unknown_camera_ids.add(camera_id)
+            camera_id = forced_camera_id or camera_id_for_image(
+                image_path, config.input_dir, default_camera_id=config.default_camera_id
+            )
+            location_name = camera_lookup.get(camera_id, "")
 
             out_path = route_image(
                 src_path=image_path,
@@ -203,8 +176,10 @@ def run(config: AppConfig) -> int:
                 dry_run=config.dry_run,
             )
             summary.on_result(result.has_animal)
-            rows.append(
+            report_rows.append(
                 ReportRow(
+                    run_id=run_id,
+                    camera_id=camera_id,
                     source_path=str(image_path),
                     output_path=str(out_path),
                     has_animal=result.has_animal,
@@ -213,59 +188,161 @@ def run(config: AppConfig) -> int:
                     animal_detections=result.animal_detections,
                 )
             )
-            if result.has_animal:
-                timestamp = overlay.timestamp_iso or metadata.timestamp or ""
-                temperature_c_value = overlay.temperature_c if overlay.temperature_c is not None else metadata.temperature_c
-                temperature_f_value = overlay.temperature_f
-                temperature_c = "" if temperature_c_value is None else f"{temperature_c_value:.3f}"
-                temperature_f = "" if temperature_f_value is None else f"{temperature_f_value:.3f}"
-                gps_lat = "" if metadata.gps_lat is None else f"{metadata.gps_lat:.6f}"
-                gps_lon = "" if metadata.gps_lon is None else f"{metadata.gps_lon:.6f}"
-                for detection in result.detections:
-                    if not is_animal_label(detection.label):
-                        continue
-                    observation_rows.append(
-                        ObservationRow(
-                            observation_id=uuid.uuid4().hex,
-                            timestamp=timestamp,
-                            overlay_date=overlay.date_ymd or "",
-                            overlay_time=overlay.time_24h or "",
-                            camera_id=camera_id,
-                            image_path=str(out_path),
-                            source_path=str(image_path),
-                            species_label=detection.label,
-                            confidence=detection.confidence,
-                            run_id=run_id,
-                            temperature_c=temperature_c,
-                            temperature_f=temperature_f,
-                            gps_lat=gps_lat,
-                            gps_lon=gps_lon,
-                            overlay_text=overlay.raw_text,
-                        )
-                    )
 
-    write_report(rows, config.report_csv)
-    append_observations(config.observations_csv, observation_rows)
+            if not result.has_animal:
+                continue
+
+            timestamp = overlay.timestamp_iso or metadata.timestamp or ""
+            date, time = _split_datetime(timestamp)
+            temperature_c_value = overlay.temperature_c if overlay.temperature_c is not None else metadata.temperature_c
+            animal_detections = [d for d in result.detections if is_animal_label(d.label)]
+            animal_detections.sort(key=lambda d: d.confidence, reverse=True)
+            top_species = animal_detections[0].label if animal_detections else "animal"
+            top_conf = animal_detections[0].confidence if animal_detections else 0.0
+            observations.append(
+                ObservationRecord(
+                    observation_id="",
+                    file_name=out_path.name,
+                    camera_id=camera_id,
+                    location_name=location_name,
+                    photo_datetime=timestamp,
+                    date=date,
+                    time=time,
+                    temperature_c="" if temperature_c_value is None else f"{temperature_c_value:.3f}",
+                    animal_detected="yes",
+                    species=top_species,
+                    species_confidence=f"{top_conf:.6f}",
+                    count=str(max(1, result.animal_detections)),
+                    image_path=str(out_path),
+                    source_path=str(image_path),
+                )
+            )
+
+    write_report(report_rows, config.report_csv)
+    upserted = upsert_and_save(config.observations_csv, observations)
     generate_graph_datasets(config.observations_csv, config.graphs_dir)
 
     print(
         f"Processed {summary.processed} images | "
         f"animals: {summary.animals} | non_animals: {summary.non_animals}"
     )
-    print(f"Report written to: {config.report_csv}")
-    print(f"Observations appended: {len(observation_rows)} -> {config.observations_csv}")
+    print(f"Raw detections report: {config.report_csv}")
+    print(f"Observations upserted: {upserted} -> {config.observations_csv}")
     print(f"Graph datasets written to: {config.graphs_dir}")
-    if unknown_camera_ids:
-        sorted_ids = ", ".join(sorted(unknown_camera_ids))
-        print(f"Warning: camera_id(s) not found in {config.cameras_csv}: {sorted_ids}")
+    return 0
+
+
+def run_review(input_dir: Path, observations_csv: Path, recursive: bool, default_camera_id: str, forced_camera_id: str | None) -> int:
+    if not input_dir.exists() or not input_dir.is_dir():
+        raise FileNotFoundError(f"Review input directory not found: {input_dir}")
+
+    ensure_observations_file(observations_csv)
+    rows = load_observations(observations_csv)
+    images = discover_images(input_dir, recursive=recursive)
+    if not images:
+        print(f"No images found in {input_dir}")
+        return 0
+
+    reviewed_count = 0
+    for image_path in images:
+        camera_id = forced_camera_id or camera_id_for_image(
+            image_path=image_path,
+            input_root=input_dir,
+            default_camera_id=default_camera_id,
+        )
+        idx = find_observation_index(rows, str(image_path), image_path.name, camera_id)
+        if idx is None:
+            rows.append(
+                ObservationRecord(
+                    observation_id="",
+                    file_name=image_path.name,
+                    camera_id=camera_id,
+                    location_name="",
+                    photo_datetime="",
+                    date="",
+                    time="",
+                    temperature_c="",
+                    animal_detected="yes",
+                    species="unknown",
+                    species_confidence="",
+                    count="1",
+                    image_path=str(image_path),
+                    source_path="",
+                ).to_row()
+            )
+            idx = len(rows) - 1
+
+        row = rows[idx]
+        print("\n--- Review ---")
+        print(f"file_name:           {row.get('file_name', '')}")
+        print(f"camera_id:           {row.get('camera_id', '')}")
+        print(f"photo_datetime:      {row.get('photo_datetime', '')}")
+        print(f"temperature_c:       {row.get('temperature_c', '')}")
+        print(f"ai species/conf:     {row.get('species', '')} / {row.get('species_confidence', '')}")
+        print(f"ai count:            {row.get('count', '')}")
+        print(f"image_path:          {row.get('image_path', '')}")
+
+        row["species"] = _prompt("species", row.get("species", ""))
+        row["count"] = _prompt("count", row.get("count", "1") or "1")
+        row["reviewed"] = _to_yes_no(_prompt("reviewed (yes/no)", row.get("reviewed", "yes") or "yes"))
+        row["ai_corrected"] = _to_yes_no(_prompt("ai_corrected (yes/no)", row.get("ai_corrected", "no") or "no"))
+        row["notes"] = _prompt("notes", row.get("notes", ""))
+        row["review_status"] = "reviewed" if row["reviewed"] == "yes" else "pending"
+        if not row.get("observation_id", "").strip():
+            row["observation_id"] = ""
+        reviewed_count += 1
+
+    # Normalize with upsert path to enforce stable IDs.
+    records: list[ObservationRecord] = []
+    for row in rows:
+        records.append(
+            ObservationRecord(
+                observation_id=row.get("observation_id", ""),
+                file_name=row.get("file_name", ""),
+                camera_id=row.get("camera_id", ""),
+                location_name=row.get("location_name", ""),
+                photo_datetime=row.get("photo_datetime", ""),
+                date=row.get("date", ""),
+                time=row.get("time", ""),
+                temperature_c=row.get("temperature_c", ""),
+                animal_detected=row.get("animal_detected", "yes") or "yes",
+                species=row.get("species", ""),
+                species_confidence=row.get("species_confidence", ""),
+                count=row.get("count", "1") or "1",
+                reviewed=row.get("reviewed", "no") or "no",
+                review_status=row.get("review_status", "pending") or "pending",
+                ai_corrected=row.get("ai_corrected", "no") or "no",
+                notes=row.get("notes", ""),
+                image_path=row.get("image_path", ""),
+                source_path=row.get("source_path", ""),
+            )
+        )
+    # write_observations first to persist manual edits, then upsert for ID stabilization.
+    write_observations(observations_csv, [r.to_row() for r in records])
+    upsert_and_save(observations_csv, records)
+    print(f"Review complete. Updated rows: {reviewed_count}")
+    print(f"Dataset updated: {observations_csv}")
     return 0
 
 
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+    if not argv or argv[0].startswith("-"):
+        argv = ["process", *argv]
+    args = parser.parse_args(argv)
+
+    if args.command == "review":
+        return run_review(
+            input_dir=args.input,
+            observations_csv=args.observations_csv,
+            recursive=not args.no_recursive,
+            default_camera_id=args.default_camera_id,
+            forced_camera_id=args.camera_id,
+        )
+
     config = config_from_args(args)
-    return run(config)
+    return run_process(config=config, forced_camera_id=getattr(args, "camera_id", None))
 
 
 if __name__ == "__main__":

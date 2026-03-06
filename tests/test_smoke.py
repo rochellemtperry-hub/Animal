@@ -49,6 +49,8 @@ def test_routing_and_report_smoke(tmp_path: Path) -> None:
         )
         rows.append(
             ReportRow(
+                run_id="run-test",
+                camera_id="cam-test",
                 source_path=str(image),
                 output_path=str(out),
                 has_animal=result.has_animal,

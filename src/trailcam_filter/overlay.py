@@ -18,6 +18,7 @@ class OverlayReadout:
     time_24h: str | None = None
     temperature_c: float | None = None
     temperature_f: float | None = None
+    ocr_confidence: float | None = None
     raw_text: str = ""
 
     @property
@@ -31,7 +32,7 @@ class OverlayReadout:
             return None
 
 
-def parse_overlay_text(text: str) -> OverlayReadout:
+def parse_overlay_text(text: str, ocr_confidence: float | None = None) -> OverlayReadout:
     normalized = " ".join(text.replace("\n", " ").split())
     date_match = DATE_RE.search(normalized)
     time_match = TIME_RE.search(normalized)
@@ -50,8 +51,50 @@ def parse_overlay_text(text: str) -> OverlayReadout:
         time_24h=time_match.group(0) if time_match else None,
         temperature_c=temp_c,
         temperature_f=temp_f,
+        ocr_confidence=ocr_confidence,
         raw_text=normalized,
     )
+
+
+def validate_overlay_readout(readout: OverlayReadout) -> list[str]:
+    flags: list[str] = []
+    if readout.date_ymd is None:
+        flags.append("missing_overlay_date")
+    if readout.time_24h is None:
+        flags.append("missing_overlay_time")
+    if readout.temperature_c is None:
+        flags.append("missing_overlay_temp_c")
+    if readout.temperature_c is not None and (readout.temperature_c < -40.0 or readout.temperature_c > 80.0):
+        flags.append("overlay_temp_out_of_range")
+    if readout.temperature_c is not None and readout.temperature_f is not None:
+        expected_f = readout.temperature_c * (9.0 / 5.0) + 32.0
+        if abs(expected_f - readout.temperature_f) > 2.0:
+            flags.append("overlay_temp_unit_mismatch")
+    if readout.ocr_confidence is not None and readout.ocr_confidence < 50.0:
+        flags.append("low_ocr_confidence")
+    return flags
+
+
+def _ocr_text_with_confidence(binary_image: object) -> tuple[str, float | None]:
+    import pytesseract
+
+    data = pytesseract.image_to_data(binary_image, output_type=pytesseract.Output.DICT, config="--psm 6")
+    words: list[str] = []
+    confidences: list[float] = []
+    for text, conf in zip(data.get("text", []), data.get("conf", [])):
+        token = (text or "").strip()
+        if not token:
+            continue
+        try:
+            conf_value = float(conf)
+        except (TypeError, ValueError):
+            conf_value = -1.0
+        words.append(token)
+        if conf_value >= 0:
+            confidences.append(conf_value)
+    joined_text = " ".join(words)
+    avg_conf = (sum(confidences) / len(confidences)) if confidences else None
+    return joined_text, avg_conf
 
 
 def extract_overlay_readout(image_path: Path, strip_ratio: float = 0.2) -> OverlayReadout:
@@ -75,8 +118,8 @@ def extract_overlay_readout(image_path: Path, strip_ratio: float = 0.2) -> Overl
         return OverlayReadout()
 
     try:
-        text = pytesseract.image_to_string(binary, config="--psm 6")
+        text, avg_conf = _ocr_text_with_confidence(binary)
     except Exception:
         return OverlayReadout()
 
-    return parse_overlay_text(text)
+    return parse_overlay_text(text, ocr_confidence=avg_conf)
