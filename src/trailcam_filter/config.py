@@ -17,4 +17,5 @@ class AppConfig:
     action: str = "copy"
     keep_structure: bool = True
     device: str | None = None
+    batch_size: int = 16
     dry_run: bool = False
