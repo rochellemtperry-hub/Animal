@@ -25,6 +25,19 @@ data/raw/
 
 Subfolders are supported by default (recursive scan).
 
+## 2.5 Verify Model File
+
+Default model expected by the CLI:
+- `models/weights/megadetector.pt`
+
+Check it exists:
+
+```bash
+ls -lh models/weights/megadetector.pt
+```
+
+If using a custom model, pass `--model /path/to/model.pt` in the run command.
+
 ## 3. Run Inference
 
 Standard run:

@@ -30,6 +30,27 @@ CSV columns:
 
 This repo imports YOLOv5 internals directly (`models.*`, `utils.*`), so include `vendor/yolov5` on `PYTHONPATH`.
 
+## Model Setup
+
+Default model path used by the CLI:
+- `models/weights/megadetector.pt`
+
+This repository currently already includes that file. Verify before running:
+
+```bash
+ls -lh models/weights/megadetector.pt
+```
+
+If you want to use a different YOLOv5 `.pt` file:
+1. Place it in `models/weights/` (or any path you prefer).
+2. Pass it with `--model`.
+
+Example:
+
+```bash
+PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --model models/weights/your_model.pt
+```
+
 ## Setup
 
 ```bash
