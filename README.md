@@ -12,6 +12,8 @@ Given an input folder, the tool writes:
 - `data/outputs/animals/`
 - `data/outputs/non_animals/`
 - `data/reports/detections.csv`
+- `data/observations/animal_observations.csv` (append-only canonical observations)
+- `data/graphs/*.csv` (graph-ready aggregate datasets)
 
 CSV columns:
 - `source_path`
@@ -87,6 +89,9 @@ PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw
 - `--output-animals` output directory for animal images
 - `--output-non-animals` output directory for non-animal images
 - `--report-csv` CSV report path
+- `--observations-csv` append-only observations CSV path
+- `--cameras-csv` camera metadata CSV path
+- `--graphs-dir` output directory for graph-ready CSVs
 - `--conf-threshold` detection confidence threshold (default: `0.25`)
 - `--iou-threshold` NMS IOU threshold (default: `0.45`)
 - `--device` inference device (examples: `cpu`, `cuda:0`)
@@ -140,6 +145,21 @@ Dry-run (no file operations):
 ```bash
 PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --dry-run
 ```
+
+## Observation + Graph Pipeline
+
+- Animal detections are appended to `data/observations/animal_observations.csv`.
+- Metadata extraction attempts to capture:
+  - `timestamp` (EXIF date/time)
+  - `temperature_c` (when embedded in EXIF description/comments)
+  - `gps_lat`, `gps_lon`
+- Camera ID is inferred from the first folder under input root.
+  - Example: `data/raw/cam_01/image.jpg` -> `camera_id=cam_01`
+- Graph-ready datasets are regenerated each run in `data/graphs/`:
+  - `daily_counts_by_camera.csv`
+  - `species_by_camera.csv`
+  - `camera_cooccurrence.csv`
+  - `observation_points.csv` (includes image paths for linking back to files)
 
 ## Supported Image Types
 

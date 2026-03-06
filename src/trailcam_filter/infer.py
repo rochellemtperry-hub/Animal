@@ -68,6 +68,10 @@ def _is_animal_label(label: str) -> bool:
     return any(keyword in normalized for keyword in ANIMAL_LABEL_KEYWORDS)
 
 
+def is_animal_label(label: str) -> bool:
+    return _is_animal_label(label)
+
+
 class UltraLyticsDetector:
     def __init__(
         self,

@@ -10,6 +10,9 @@ class AppConfig:
     output_animals_dir: Path
     output_non_animals_dir: Path
     report_csv: Path
+    observations_csv: Path
+    cameras_csv: Path
+    graphs_dir: Path
     model_path: Path
     conf_threshold: float = 0.25
     iou_threshold: float = 0.45
