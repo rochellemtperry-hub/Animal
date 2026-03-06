@@ -68,6 +68,10 @@ def _is_animal_label(label: str) -> bool:
     return any(keyword in normalized for keyword in ANIMAL_LABEL_KEYWORDS)
 
 
+def is_animal_label(label: str) -> bool:
+    return _is_animal_label(label)
+
+
 class UltraLyticsDetector:
     def __init__(
         self,
@@ -122,7 +126,7 @@ class UltraLyticsDetector:
     def device_name(self) -> str:
         return self._device_name
 
-    def predict(self, image_path: Path) -> list[Detection]:
+    def _prepare_image(self, image_path: Path) -> tuple[object, object]:
         im0 = self._cv2.imread(str(image_path))
         if im0 is None:
             raise RuntimeError(f"Failed to read image: {image_path}")
@@ -130,12 +134,42 @@ class UltraLyticsDetector:
         im = self._letterbox(im0, self._imgsz, stride=self._model.stride, auto=self._model.pt)[0]
         im = im.transpose((2, 0, 1))[::-1]  # HWC BGR -> CHW RGB
         im = self._np.ascontiguousarray(im)
+        return im0, im
 
-        tensor = self._torch.from_numpy(im).to(self._model.device)
+    def _postprocess_predictions(self, pred: object, im0_list: list[object], input_shape: tuple[int, int]) -> list[list[Detection]]:
+        names = self._model.names
+        results: list[list[Detection]] = []
+
+        for i, det in enumerate(pred):
+            if det is None or len(det) == 0:
+                results.append([])
+                continue
+
+            det[:, :4] = self._scale_boxes(input_shape, det[:, :4], im0_list[i].shape).round()
+            detections: list[Detection] = []
+            for *_, conf, cls in det:
+                class_id = int(cls.item())
+                confidence = float(conf.item())
+                if isinstance(names, dict):
+                    label = str(names.get(class_id, class_id))
+                else:
+                    label = str(names[class_id]) if class_id < len(names) else str(class_id)
+                detections.append(Detection(label=label, confidence=confidence))
+            results.append(detections)
+
+        return results
+
+    def predict_batch(self, image_paths: list[Path]) -> list[list[Detection]]:
+        if not image_paths:
+            return []
+
+        prepared = [self._prepare_image(path) for path in image_paths]
+        im0_list = [im0 for im0, _ in prepared]
+        im_batch = self._np.stack([im for _, im in prepared], axis=0)
+
+        tensor = self._torch.from_numpy(im_batch).to(self._model.device)
         tensor = tensor.half() if self._model.fp16 else tensor.float()
         tensor /= 255.0
-        if tensor.ndim == 3:
-            tensor = tensor[None]
 
         pred = self._model(tensor, augment=False, visualize=False)
         pred = self._nms(
@@ -147,28 +181,20 @@ class UltraLyticsDetector:
             max_det=1000,
         )
         if not pred:
-            return []
+            return [[] for _ in image_paths]
 
-        det = pred[0]
-        if det is None or len(det) == 0:
-            return []
-        det[:, :4] = self._scale_boxes(tensor.shape[2:], det[:, :4], im0.shape).round()
+        return self._postprocess_predictions(pred, im0_list, tensor.shape[2:])
 
-        names = self._model.names
-        detections: list[Detection] = []
-        for *_, conf, cls in det:
-            class_id = int(cls.item())
-            confidence = float(conf.item())
-            if isinstance(names, dict):
-                label = str(names.get(class_id, class_id))
-            else:
-                label = str(names[class_id]) if class_id < len(names) else str(class_id)
-            detections.append(Detection(label=label, confidence=confidence))
-        return detections
+    def predict(self, image_path: Path) -> list[Detection]:
+        return self.predict_batch([image_path])[0]
 
 
 def infer_image(detector: Detector, image_path: Path) -> ImageInference:
     detections = detector.predict(image_path)
+    return infer_detections(detections)
+
+
+def infer_detections(detections: list[Detection]) -> ImageInference:
     animal_confidences = [
         d.confidence for d in detections if _is_animal_label(d.label)
     ]
