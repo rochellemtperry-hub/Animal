@@ -63,6 +63,12 @@ pip install -r requirements.txt
 git clone https://github.com/ultralytics/yolov5.git vendor/yolov5
 ```
 
+For local test/dev work:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 Example runtime invocation from repo root:
 
 ```bash
@@ -142,6 +148,14 @@ Dry-run (no file operations):
 
 ```bash
 PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --dry-run
+```
+
+## Testing
+
+Run the smoke test suite from the repo root:
+
+```bash
+pytest -q
 ```
 
 ## Supported Image Types
