@@ -26,7 +26,7 @@ CSV columns:
 ## Requirements
 
 - Python 3.10+ (project currently tested with Python 3.12)
-- PyTorch installed
+- Runtime dependencies installed from `requirements.txt`
 - YOLOv5 code available at `vendor/yolov5`
 - A YOLOv5-compatible model weights file (default: `models/weights/megadetector.pt`)
 
@@ -37,10 +37,12 @@ This repo imports YOLOv5 internals directly (`models.*`, `utils.*`), so include 
 Default model path used by the CLI:
 - `models/weights/megadetector.pt`
 
-This repository currently already includes that file. Verify before running:
+This repository does not commit model weights. Create the directory and download the default model before running:
 
 ```bash
-ls -lh models/weights/megadetector.pt
+mkdir -p models/weights
+wget -O models/weights/megadetector.pt \
+  https://github.com/agentmorris/MegaDetector/releases/download/v5.0/md_v5a.0.0.pt
 ```
 
 If you want to use a different YOLOv5 `.pt` file:
@@ -59,7 +61,14 @@ PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --model models/w
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-# Install torch + other runtime deps you use in your environment.
+pip install -r requirements.txt
+git clone https://github.com/ultralytics/yolov5.git vendor/yolov5
+```
+
+For local test/dev work:
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 Example runtime invocation from repo root:
@@ -160,6 +169,13 @@ PYTHONPATH=src:vendor/yolov5 python -m src.cli --input data/raw --dry-run
   - `species_by_camera.csv`
   - `camera_cooccurrence.csv`
   - `observation_points.csv` (includes image paths for linking back to files)
+## Testing
+
+Run the smoke test suite from the repo root:
+
+```bash
+pytest -q
+```
 
 ## Supported Image Types
 
