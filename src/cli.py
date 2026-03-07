@@ -8,7 +8,7 @@ import uuid
 
 from trailcam_filter.config import AppConfig
 from trailcam_filter.graphs import generate_graph_datasets
-from trailcam_filter.infer import UltraLyticsDetector, infer_detections, infer_image, is_animal_label
+from trailcam_filter.infer import Detector, ImageInference, UltraLyticsDetector, infer_detections, infer_image, is_animal_label
 from trailcam_filter.io import discover_images, route_image
 from trailcam_filter.metadata import extract_image_metadata
 from trailcam_filter.observations import (
@@ -20,6 +20,7 @@ from trailcam_filter.observations import (
 )
 from trailcam_filter.postprocess import RunSummary
 from trailcam_filter.report import ReportRow, write_report
+from tqdm import tqdm
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -146,6 +147,28 @@ def _chunked(items: list[Path], size: int) -> Iterator[list[Path]]:
         yield batch
 
 
+def _infer_batch_resilient(
+    detector: Detector,
+    image_batch: list[Path],
+) -> tuple[list[tuple[Path, ImageInference]], list[tuple[Path, str]]]:
+    if hasattr(detector, "predict_batch"):
+        try:
+            detections_by_image = detector.predict_batch(image_batch)  # type: ignore[attr-defined]
+            batch_results = [infer_detections(detections) for detections in detections_by_image]
+            return list(zip(image_batch, batch_results)), []
+        except Exception as exc:
+            tqdm.write(f"Warning: batch inference failed; retrying individually: {exc}")
+
+    results: list[tuple[Path, ImageInference]] = []
+    skipped: list[tuple[Path, str]] = []
+    for image_path in image_batch:
+        try:
+            results.append((image_path, infer_image(detector, image_path)))
+        except Exception as exc:
+            skipped.append((image_path, str(exc)))
+    return results, skipped
+
+
 def run(config: AppConfig) -> int:
     if not config.input_dir.exists() or not config.input_dir.is_dir():
         raise FileNotFoundError(f"Input directory not found: {config.input_dir}")
@@ -177,63 +200,78 @@ def run(config: AppConfig) -> int:
     observation_rows: list[ObservationRow] = []
     unknown_camera_ids: set[str] = set()
 
-    for image_batch in _chunked(images, config.batch_size):
-        if hasattr(detector, "predict_batch"):
-            detections_by_image = detector.predict_batch(image_batch)  # type: ignore[attr-defined]
-            batch_results = [infer_detections(detections) for detections in detections_by_image]
-        else:
-            batch_results = [infer_image(detector, image_path) for image_path in image_batch]
+    with tqdm(total=len(images), desc="Processing images", unit="img") as progress:
+        for image_batch in _chunked(images, config.batch_size):
+            successful_results, skipped_results = _infer_batch_resilient(detector, image_batch)
 
-        for image_path, result in zip(image_batch, batch_results):
-            metadata = extract_image_metadata(image_path)
-            camera_id = camera_id_for_image(image_path, config.input_dir)
-            if known_camera_ids and camera_id not in known_camera_ids:
-                unknown_camera_ids.add(camera_id)
-
-            out_path = route_image(
-                src_path=image_path,
-                input_root=config.input_dir,
-                output_animals_dir=config.output_animals_dir,
-                output_non_animals_dir=config.output_non_animals_dir,
-                has_animal=result.has_animal,
-                action=config.action,
-                keep_structure=config.keep_structure,
-                dry_run=config.dry_run,
-            )
-            summary.on_result(result.has_animal)
-            rows.append(
-                ReportRow(
-                    source_path=str(image_path),
-                    output_path=str(out_path),
-                    has_animal=result.has_animal,
-                    top_animal_confidence=result.top_animal_confidence,
-                    total_detections=result.total_detections,
-                    animal_detections=result.animal_detections,
+            for image_path, error in skipped_results:
+                summary.on_skipped()
+                progress.update(1)
+                progress.set_postfix(
+                    animals=summary.animals,
+                    non_animals=summary.non_animals,
+                    skipped=summary.skipped,
+                    refresh=False,
                 )
-            )
-            if result.has_animal:
-                timestamp = metadata.timestamp or ""
-                temperature_c = "" if metadata.temperature_c is None else f"{metadata.temperature_c:.3f}"
-                gps_lat = "" if metadata.gps_lat is None else f"{metadata.gps_lat:.6f}"
-                gps_lon = "" if metadata.gps_lon is None else f"{metadata.gps_lon:.6f}"
-                for detection in result.detections:
-                    if not is_animal_label(detection.label):
-                        continue
-                    observation_rows.append(
-                        ObservationRow(
-                            observation_id=uuid.uuid4().hex,
-                            timestamp=timestamp,
-                            camera_id=camera_id,
-                            image_path=str(out_path),
-                            source_path=str(image_path),
-                            species_label=detection.label,
-                            confidence=detection.confidence,
-                            run_id=run_id,
-                            temperature_c=temperature_c,
-                            gps_lat=gps_lat,
-                            gps_lon=gps_lon,
-                        )
+                tqdm.write(f"Warning: skipping image {image_path}: {error}")
+
+            for image_path, result in successful_results:
+                metadata = extract_image_metadata(image_path)
+                camera_id = camera_id_for_image(image_path, config.input_dir)
+                if known_camera_ids and camera_id not in known_camera_ids:
+                    unknown_camera_ids.add(camera_id)
+
+                out_path = route_image(
+                    src_path=image_path,
+                    input_root=config.input_dir,
+                    output_animals_dir=config.output_animals_dir,
+                    output_non_animals_dir=config.output_non_animals_dir,
+                    has_animal=result.has_animal,
+                    action=config.action,
+                    keep_structure=config.keep_structure,
+                    dry_run=config.dry_run,
+                )
+                summary.on_result(result.has_animal)
+                rows.append(
+                    ReportRow(
+                        source_path=str(image_path),
+                        output_path=str(out_path),
+                        has_animal=result.has_animal,
+                        top_animal_confidence=result.top_animal_confidence,
+                        total_detections=result.total_detections,
+                        animal_detections=result.animal_detections,
                     )
+                )
+                if result.has_animal:
+                    timestamp = metadata.timestamp or ""
+                    temperature_c = "" if metadata.temperature_c is None else f"{metadata.temperature_c:.3f}"
+                    gps_lat = "" if metadata.gps_lat is None else f"{metadata.gps_lat:.6f}"
+                    gps_lon = "" if metadata.gps_lon is None else f"{metadata.gps_lon:.6f}"
+                    for detection in result.detections:
+                        if not is_animal_label(detection.label):
+                            continue
+                        observation_rows.append(
+                            ObservationRow(
+                                observation_id=uuid.uuid4().hex,
+                                timestamp=timestamp,
+                                camera_id=camera_id,
+                                image_path=str(out_path),
+                                source_path=str(image_path),
+                                species_label=detection.label,
+                                confidence=detection.confidence,
+                                run_id=run_id,
+                                temperature_c=temperature_c,
+                                gps_lat=gps_lat,
+                                gps_lon=gps_lon,
+                            )
+                        )
+                progress.update(1)
+                progress.set_postfix(
+                    animals=summary.animals,
+                    non_animals=summary.non_animals,
+                    skipped=summary.skipped,
+                    refresh=False,
+                )
 
     write_report(rows, config.report_csv)
     append_observations(config.observations_csv, observation_rows)
@@ -241,7 +279,7 @@ def run(config: AppConfig) -> int:
 
     print(
         f"Processed {summary.processed} images | "
-        f"animals: {summary.animals} | non_animals: {summary.non_animals}"
+        f"animals: {summary.animals} | non_animals: {summary.non_animals} | skipped: {summary.skipped}"
     )
     print(f"Report written to: {config.report_csv}")
     print(f"Observations appended: {len(observation_rows)} -> {config.observations_csv}")

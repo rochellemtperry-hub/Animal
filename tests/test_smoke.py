@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cli import _infer_batch_resilient
 from trailcam_filter.infer import Detection, infer_image
 from trailcam_filter.io import route_image
 from trailcam_filter.report import ReportRow, write_report
@@ -13,6 +14,16 @@ class StubDetector:
 
     def predict(self, image_path: Path) -> list[Detection]:
         return self._by_name.get(image_path.name, [])
+
+
+class FlakyBatchDetector:
+    def predict_batch(self, image_paths: list[Path]) -> list[list[Detection]]:
+        raise RuntimeError("batch read failed")
+
+    def predict(self, image_path: Path) -> list[Detection]:
+        if image_path.name == "bad.jpg":
+            raise RuntimeError(f"Failed to read image: {image_path}")
+        return [Detection(label="animal", confidence=0.9)]
 
 
 def test_routing_and_report_smoke(tmp_path: Path) -> None:
@@ -66,3 +77,15 @@ def test_routing_and_report_smoke(tmp_path: Path) -> None:
     content = report_csv.read_text(encoding="utf-8")
     assert "deer.jpg" in content
     assert "empty.jpg" in content
+
+
+def test_batch_fallback_skips_bad_images(tmp_path: Path) -> None:
+    good = tmp_path / "good.jpg"
+    bad = tmp_path / "bad.jpg"
+    good.write_bytes(b"ok")
+    bad.write_bytes(b"bad")
+
+    results, skipped = _infer_batch_resilient(FlakyBatchDetector(), [good, bad])
+
+    assert [(path.name, result.has_animal) for path, result in results] == [("good.jpg", True)]
+    assert skipped == [(bad, f"Failed to read image: {bad}")]

@@ -8,6 +8,7 @@ class RunSummary:
     processed: int = 0
     animals: int = 0
     non_animals: int = 0
+    skipped: int = 0
 
     def on_result(self, has_animal: bool) -> None:
         self.processed += 1
@@ -15,3 +16,6 @@ class RunSummary:
             self.animals += 1
         else:
             self.non_animals += 1
+
+    def on_skipped(self) -> None:
+        self.skipped += 1
